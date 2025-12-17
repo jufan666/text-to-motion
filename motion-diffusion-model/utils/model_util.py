@@ -1,5 +1,6 @@
 import torch
 from model.mdm import MDM
+from model.lora_adapter import add_lora_to_mdm
 from diffusion import gaussian_diffusion as gd
 from diffusion.respace import SpacedDiffusion, space_timesteps
 from utils.parser_util import get_cond_mode
@@ -17,6 +18,17 @@ def load_model_wo_clip(model, state_dict):
 
 def create_model_and_diffusion(args, data):
     model = MDM(**get_model_args(args, data))
+
+    # 可选：在 MDM 上挂载 LoRA 适配器，用于显存友好的微调
+    if getattr(args, "use_lora", False):
+        model = add_lora_to_mdm(
+            model,
+            r=getattr(args, "lora_r", 128),
+            lora_alpha=getattr(args, "lora_alpha", 16),
+            lora_dropout=getattr(args, "lora_dropout", 0.0),
+            target_spec=getattr(args, "lora_target_spec", "all"),
+        )
+
     diffusion = create_gaussian_diffusion(args)
     return model, diffusion
 

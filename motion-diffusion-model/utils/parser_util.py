@@ -120,6 +120,36 @@ def add_model_options(parser):
                        help="Pose embedding max length.")
     group.add_argument("--use_ema", action='store_true',
                     help="If True, will use EMA model averaging.")
+    # LoRA 相关参数（用于显存友好的高效微调）
+    group.add_argument(
+        "--use_lora",
+        action="store_true",
+        help="如果为 True，则在 MDM 的注意力和文本嵌入层上挂载 LoRA 适配器，仅训练低秩增量参数。",
+    )
+    group.add_argument(
+        "--lora_r",
+        default=128,
+        type=int,
+        help="LoRA rank（低秩维度），典型取值 128~256。",
+    )
+    group.add_argument(
+        "--lora_alpha",
+        default=16,
+        type=int,
+        help="LoRA scaling 系数 α，典型取值 16~32。",
+    )
+    group.add_argument(
+        "--lora_dropout",
+        default=0.0,
+        type=float,
+        help="LoRA dropout 概率。",
+    )
+    group.add_argument(
+        "--lora_target_spec",
+        default="all",
+        type=str,
+        help="LoRA 作用范围，逗号分隔。预设：attn,ffn,text,all；也可直接写模块名。",
+    )
     
 
     group.add_argument("--multi_target_cond", action='store_true', help="If true, enable multi-target conditioning (aka Sigal's model).")
