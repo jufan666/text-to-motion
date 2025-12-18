@@ -9,12 +9,23 @@ LOGGER = logging.getLogger(__name__)
 def _resolve_target_modules(target_modules: Optional[Iterable[str]], target_spec: Optional[str]) -> Sequence[str]:
     """
     根据用户指定的 target_modules 或 target_spec（逗号分隔的 preset）生成最终 LoRA 作用的模块名列表。
-    预设关键词：
-        - attn:   MultiheadAttention 的输出投影 out_proj
-        - ffn:    Transformer FFN 的 linear1 / linear2
+    
+    预设关键词（peft 使用模糊匹配，会匹配所有包含该字符串的模块名）：
+        - attn:   所有 attention 的 out_proj（包括 self-attn 和 cross-attn）
+                  * trans_enc: seqTransEncoder.layers.*.self_attn.out_proj
+                  * trans_dec: seqTransDecoder.layers.*.self_attn.out_proj (self-attn)
+                              seqTransDecoder.layers.*.multihead_attn.out_proj (cross-attn)
+        
+        - ffn:    所有 FFN 的 linear1 / linear2
+                  * trans_enc: seqTransEncoder.layers.*.linear1/linear2
+                  * trans_dec: seqTransDecoder.layers.*.linear1/linear2
+        
         - text:   文本条件的 embed_text 线性层
-        - all:    attn + ffn + text
-    也可以直接传入具体模块名（如 out_proj, linear1）。
+                  * 位置: embed_text (MDM 类下，将 CLIP/BERT 编码投影到 latent_dim)
+        
+        - all:    attn + ffn + text（所有上述模块）
+    
+    也可以直接传入具体模块名（如 out_proj, linear1），peft 会进行模糊匹配。
     """
     if target_modules is not None:
         return list(target_modules)
@@ -23,11 +34,27 @@ def _resolve_target_modules(target_modules: Optional[Iterable[str]], target_spec
     if not target_spec:
         target_spec = "all"
 
+    # PyTorch Transformer 模块命名说明：
+    # - TransformerEncoderLayer: self_attn.out_proj, linear1, linear2
+    # - TransformerDecoderLayer: self_attn.out_proj, multihead_attn.out_proj, linear1, linear2
+    # - MDM 中: seqTransEncoder.layers.*.self_attn.out_proj 或 seqTransDecoder.layers.*.self_attn.out_proj / multihead_attn.out_proj
+    # - MDM 中: seqTransEncoder.layers.*.linear1/linear2 或 seqTransDecoder.layers.*.linear1/linear2
+    # - MDM 中: embed_text (直接在 MDM 类下，用于文本条件投影)
+    # peft 使用模糊匹配，所以 "out_proj" 会匹配所有包含该字符串的模块名
     preset_map = {
-        "attn": ["out_proj"],               # attention 输出层（同时覆盖 self / cross）
-        "ffn": ["linear1", "linear2"],      # FFN 两个线性层
-        "text": ["embed_text"],             # 文本投影
-        "all": ["out_proj", "linear1", "linear2", "embed_text"],
+        "attn": ["out_proj"],               # 匹配所有 attention 的 out_proj（包括 self-attn 和 cross-attn）
+        # 位置: seqTransEncoder.layers.*.self_attn.out_proj (trans_enc)
+        #       seqTransDecoder.layers.*.self_attn.out_proj (trans_dec, self-attn)
+        #       seqTransDecoder.layers.*.multihead_attn.out_proj (trans_dec, cross-attn)
+        
+        "ffn": ["linear1", "linear2"],      # 匹配所有 FFN 的线性层
+        # 位置: seqTransEncoder.layers.*.linear1/linear2 (trans_enc)
+        #       seqTransDecoder.layers.*.linear1/linear2 (trans_dec)
+        
+        "text": ["embed_text"],             # 文本条件的线性投影层
+        # 位置: embed_text (MDM 类下，将 CLIP/BERT 编码后的文本特征投影到 latent_dim)
+        
+        "all": ["out_proj", "linear1", "linear2", "embed_text"],  # 上述所有模块
     }
 
     targets = []
