@@ -138,3 +138,11 @@ slurm**/
 *.err
 *.slurm
 .vscode/
+
+
+# dataset数据集忽略
+kit/
+dataset/
+
+# 预训练模型忽略
+*.zip
