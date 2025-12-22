@@ -14,6 +14,8 @@ from utils.model_util import create_model_and_diffusion
 from train.train_platforms import WandBPlatform, ClearmlPlatform, TensorboardPlatform, NoPlatform  # required for the eval operation
 
 import torch
+from peft import PeftModel 
+
 if torch.cuda.is_available():
     torch.backends.cudnn.benchmark = True
 
@@ -48,6 +50,26 @@ def main():
     print("creating model and diffusion...")
     model, diffusion = create_model_and_diffusion(args, data)
     model.to(dist_util.dev())
+
+    # === LoRA 挂载验证 ===
+    print("Model class:", type(model))
+    if isinstance(model, PeftModel):
+        print("LoRA 已成功挂载到 MDM 上")
+        print("\n可训练参数统计:")
+        model.print_trainable_parameters()
+        
+        # 打印 LoRA 层的名称
+        print("\nLoRA 层列表:")
+        lora_layers = [name for name, param in model.named_parameters() if "lora_" in name]
+        for layer_name in lora_layers[:10]:  # 只打印前10个，避免输出太长
+            print(f"  - {layer_name}")
+        if len(lora_layers) > 10:
+            print(f"  ... 还有 {len(lora_layers) - 10} 个 LoRA 层")
+    else:
+        print("LoRA 未挂载（当前不是 PeftModel）")
+        print("提示: 请确保使用了 --use_lora 参数")
+    # =====================
+
     model.rot2xyz.smpl_model.eval()
 
     print('Total params: %.2fM' % (sum(p.numel() for p in model.parameters_wo_clip()) / 1000000.0))
