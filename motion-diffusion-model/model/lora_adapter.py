@@ -87,26 +87,31 @@ def add_lora_to_mdm(
     target_spec: Optional[str] = None,
 ):
     """
-    在 MDM 上挂载 LoRA 适配器（用户可选择作用范围）。
-
-    参数:
-        model: 已构建好的 MDM 模型实例。
-        r: LoRA rank（低秩维度），建议 128~256。
-        lora_alpha: LoRA scaling 系数，建议 16~32。
-        lora_dropout: LoRA dropout。
-        target_modules: 直接给出模块名列表（模糊匹配）；若为空，则根据 target_spec 生成。
-        target_spec: 逗号分隔的 preset/模块名，支持 attn, ffn, text, all。
+    在 MDM 上挂载 LoRA 适配器。
     """
-
     resolved_targets = _resolve_target_modules(target_modules, target_spec)
 
+    # -----------------------------------------------------------
+    # 手动给自定义模型添加一个 config 属性
+    # PEFT 库需要通过 model.config 来判断一些模型属性，自定义模型通常没有。
+    # 这里我们创建一个简单的字典或对象即可。
+    # -----------------------------------------------------------
+    if not hasattr(model, "config"):
+        model.config = {"model_type": "custom_mdm"}
+
+    # -----------------------------------------------------------
+    # 移除 task_type="SEQ_2_SEQ_LM"
+    # 对于非 HF Transformer 的自定义模型（如扩散模型），不要指定 task_type。
+    # 指定 task_type 会导致 PEFT 尝试封装特定的 forward 逻辑，这与 MDM 的输入不兼容。
+    # 不指定 task_type 时，PEFT 会默认为通用的 "MODEL" 模式，只注入权重而不改变 forward 行为。
+    # -----------------------------------------------------------
     lora_config = LoraConfig(
         r=r,
         lora_alpha=lora_alpha,
         lora_dropout=lora_dropout,
         bias="none",
         target_modules=list(resolved_targets),
-        task_type="SEQ_2_SEQ_LM",  # 序列到序列条件生成，最接近当前任务
+        # task_type="SEQ_2_SEQ_LM",  <-- 删除这一行，或者显式设为 None
     )
 
     LOGGER.info(
@@ -118,6 +123,8 @@ def add_lora_to_mdm(
     )
 
     model = get_peft_model(model, lora_config)
+    
+    # 【可选优化】打印可训练参数量，确认 LoRA 挂载成功
+    # model.print_trainable_parameters() 
+    
     return model
-
-

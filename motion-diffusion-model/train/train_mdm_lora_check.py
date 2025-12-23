@@ -8,6 +8,7 @@ import json
 from utils.fixseed import fixseed
 from utils.parser_util import train_args
 from utils import dist_util
+from data_loaders.get_data import get_dataset_loader
 from train.training_loop import TrainLoop
 from utils.model_util import create_model_and_diffusion
 from train.train_platforms import WandBPlatform, ClearmlPlatform, TensorboardPlatform, NoPlatform  # required for the eval operation
@@ -15,7 +16,7 @@ from peft import PeftModel
 from utils.dataset_utils import limit_dataset_size
 import torch
 
-def main_example():
+def main():
     """
     这是示例代码，展示如何修改 train_mdm.py
     """
@@ -36,6 +37,8 @@ def main_example():
         json.dump(vars(args), fw, indent=4, sort_keys=True)
 
     dist_util.setup_dist(args.device)
+
+    
     # ... 原有的初始化代码 ...
     
     # ========== 步骤 1: 数据加载并限制大小 ==========
@@ -44,6 +47,13 @@ def main_example():
     print("="*60)
     
     # 限制训练数据量（如果指定了 max_train_samples）
+    print("creating data loader...")
+    data = get_dataset_loader(name=args.dataset, 
+                              batch_size=args.batch_size, 
+                              num_frames=args.num_frames, 
+                              fixed_len=args.pred_len + args.context_len, 
+                              pred_len=args.pred_len,
+                              device=dist_util.dev(),)
     if hasattr(args, 'max_train_samples') and args.max_train_samples > 0:
         print(f"\n[限制数据量] 设置为最多使用 {args.max_train_samples} 个训练样本")
         # 如果 data 是 DataLoader:
