@@ -128,9 +128,9 @@ def add_model_options(parser):
     )
     group.add_argument(
         "--lora_r",
-        default=128,
+        default=8,
         type=int,
-        help="LoRA rank（低秩维度），典型取值 128~256。",
+        help="LoRA rank（低秩维度），典型取值 8~16。",
     )
     group.add_argument(
         "--lora_alpha",
