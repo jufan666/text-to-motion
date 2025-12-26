@@ -139,8 +139,13 @@ class GRPOTrainer:
             # out["log_variance"] 是对数方差
             dist_mean = out["mean"]  # [B, C, H, W] - 模型预测的"理想下一步"均值
             dist_log_variance = out["log_variance"]  # [B, C, H, W]
+            
+            # 数值稳定性：限制 log_variance 的范围，避免 exp 溢出
+            dist_log_variance = torch.clamp(dist_log_variance, min=-20, max=20)
             dist_variance = torch.exp(dist_log_variance)  # [B, C, H, W]
-            dist_std = torch.exp(0.5 * dist_log_variance)  # [B, C, H, W] - 标准差
+            # 确保 variance 不会太小，避免除零
+            dist_variance = torch.clamp(dist_variance, min=1e-8)
+            dist_std = torch.sqrt(dist_variance)  # [B, C, H, W] - 标准差
             
             # 3. 计算高斯 log probability
             # 实际采取的下一步是 z_{t-1}（在 Rollout 阶段采样保存的）
@@ -149,19 +154,44 @@ class GRPOTrainer:
             # 标准化误差
             squared_error = (z_t_minus_1 - dist_mean) ** 2  # [B, C, H, W]
             
+            # 数值稳定性：避免 squared_error 过大
+            squared_error = torch.clamp(squared_error, max=1e6)
+            
             # 高斯 log probability: log p(x) = -0.5 * ((x-μ)/σ)² - log(σ) - 0.5*log(2π)
+            # 使用更稳定的计算方式
+            normalized_error = squared_error / dist_variance  # [B, C, H, W]
+            normalized_error = torch.clamp(normalized_error, max=1e6)  # 防止溢出
+            
             log_prob_per_element = (
-                -0.5 * (squared_error / dist_variance)
+                -0.5 * normalized_error
                 - dist_log_variance * 0.5  # log(σ) = 0.5 * log(σ²)
                 - 0.5 * math.log(2 * math.pi)
             )  # [B, C, H, W]
+            
+            # 检查 NaN
+            if torch.isnan(log_prob_per_element).any():
+                print(f"警告: log_prob_per_element 包含 NaN at step {i}")
+                print(f"  dist_mean range: [{dist_mean.min().item():.4f}, {dist_mean.max().item():.4f}]")
+                print(f"  dist_log_variance range: [{dist_log_variance.min().item():.4f}, {dist_log_variance.max().item():.4f}]")
+                print(f"  squared_error range: [{squared_error.min().item():.4f}, {squared_error.max().item():.4f}]")
+                log_prob_per_element = torch.nan_to_num(log_prob_per_element, nan=0.0, posinf=0.0, neginf=-1e6)
             
             # 对所有空间维度求和，得到每个样本的 log prob
             # 根据 DanceGRPO，我们对所有维度求和
             log_prob_per_timestep = log_prob_per_element.sum(dim=[1, 2, 3])  # [B]
             
+            # 检查 NaN
+            if torch.isnan(log_prob_per_timestep).any():
+                print(f"警告: log_prob_per_timestep 包含 NaN at timestep {i}")
+                log_prob_per_timestep = torch.nan_to_num(log_prob_per_timestep, nan=0.0, posinf=0.0, neginf=-1e6)
+            
             # 累积到总 log probability
             total_log_prob = total_log_prob + log_prob_per_timestep
+        
+        # 最终检查
+        if torch.isnan(total_log_prob).any():
+            print("警告: total_log_prob 包含 NaN")
+            total_log_prob = torch.nan_to_num(total_log_prob, nan=0.0, posinf=0.0, neginf=-1e6)
         
         return total_log_prob
     
@@ -275,8 +305,19 @@ class GRPOTrainer:
         group_mean = rewards_reshaped.mean(dim=1, keepdim=True)  # [B, 1]
         group_std = rewards_reshaped.std(dim=1, keepdim=True)  # [B, 1]
         
+        # 数值稳定性：确保 std 不会太小
+        group_std = torch.clamp(group_std, min=self.advantage_eps)
+        
         # 在每个组内归一化
         advantages = (rewards_reshaped - group_mean) / (group_std + self.advantage_eps)
+        
+        # 检查 NaN
+        if torch.isnan(advantages).any():
+            print("警告: advantages 计算中包含 NaN")
+            print(f"  rewards range: [{rewards.min().item():.4f}, {rewards.max().item():.4f}]")
+            print(f"  group_mean range: [{group_mean.min().item():.4f}, {group_mean.max().item():.4f}]")
+            print(f"  group_std range: [{group_std.min().item():.4f}, {group_std.max().item():.4f}]")
+            advantages = torch.nan_to_num(advantages, nan=0.0, posinf=1e6, neginf=-1e6)
         
         return advantages.view(-1)  # [B*G]
     
@@ -320,11 +361,27 @@ class GRPOTrainer:
             loss: 标量损失值
             stats: 用于记录的统计信息字典
         """
-        # 计算 ratio
-        ratio = torch.exp(log_prob_current - log_prob_ref)  # [B*G]
+        # 计算 ratio（数值稳定性：限制差值范围）
+        log_ratio = log_prob_current - log_prob_ref  # [B*G]
+        # 限制 log_ratio 范围，避免 exp 溢出
+        log_ratio = torch.clamp(log_ratio, min=-20, max=20)
+        ratio = torch.exp(log_ratio)  # [B*G]
+        
+        # 检查 NaN
+        if torch.isnan(ratio).any():
+            print("警告: ratio 包含 NaN")
+            print(f"  log_prob_current range: [{log_prob_current.min().item():.4f}, {log_prob_current.max().item():.4f}]")
+            print(f"  log_prob_ref range: [{log_prob_ref.min().item():.4f}, {log_prob_ref.max().item():.4f}]")
+            print(f"  log_ratio range: [{log_ratio.min().item():.4f}, {log_ratio.max().item():.4f}]")
+            ratio = torch.nan_to_num(ratio, nan=1.0, posinf=1e6, neginf=1e-6)
         
         # 计算 KL 惩罚
         kl = self.compute_kl_penalty(log_prob_current, log_prob_ref)
+        
+        # 检查 KL NaN
+        if torch.isnan(kl).any():
+            print("警告: kl 包含 NaN")
+            kl = torch.nan_to_num(kl, nan=0.0, posinf=1e6, neginf=0.0)
         
         # PPO 风格的裁剪目标
         ratio_clipped = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon)
@@ -337,16 +394,36 @@ class GRPOTrainer:
         # 总损失: 策略损失 - KL 惩罚
         loss = -(policy_loss.mean() - self.kl_penalty * kl.mean())
         
-        # 计算统计信息
-        stats = {
-            'loss': loss.item(),
-            'policy_loss': -policy_loss.mean().item(),
-            'kl_penalty': kl.mean().item(),
-            'mean_ratio': ratio.mean().item(),
-            'mean_advantage': advantages.mean().item(),
-            'mean_log_prob_current': log_prob_current.mean().item(),
-            'mean_log_prob_ref': log_prob_ref.mean().item(),
-        }
+        # 检查损失是否包含 NaN
+        if torch.isnan(loss) or torch.isinf(loss):
+            print("警告: loss 包含 NaN 或 Inf")
+            print(f"  policy_loss mean: {policy_loss.mean().item():.4f}")
+            print(f"  kl mean: {kl.mean().item():.4f}")
+            # 使用安全的默认值
+            loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+        
+        # 计算统计信息（使用安全的 item() 调用）
+        try:
+            stats = {
+                'loss': loss.item() if not torch.isnan(loss) else 0.0,
+                'policy_loss': -policy_loss.mean().item() if not torch.isnan(policy_loss.mean()) else 0.0,
+                'kl_penalty': kl.mean().item() if not torch.isnan(kl.mean()) else 0.0,
+                'mean_ratio': ratio.mean().item() if not torch.isnan(ratio.mean()) else 1.0,
+                'mean_advantage': advantages.mean().item() if not torch.isnan(advantages.mean()) else 0.0,
+                'mean_log_prob_current': log_prob_current.mean().item() if not torch.isnan(log_prob_current.mean()) else 0.0,
+                'mean_log_prob_ref': log_prob_ref.mean().item() if not torch.isnan(log_prob_ref.mean()) else 0.0,
+            }
+        except Exception as e:
+            print(f"警告: 计算统计信息时出错: {e}")
+            stats = {
+                'loss': 0.0,
+                'policy_loss': 0.0,
+                'kl_penalty': 0.0,
+                'mean_ratio': 1.0,
+                'mean_advantage': 0.0,
+                'mean_log_prob_current': 0.0,
+                'mean_log_prob_ref': 0.0,
+            }
         
         return loss, stats
     
@@ -423,6 +500,12 @@ class GRPOTrainer:
             model_kwargs,
         )  # [B*G]
         
+        # 检查 log_prob_current 是否包含 NaN
+        if torch.isnan(log_prob_current).any():
+            print("警告: log_prob_current 包含 NaN")
+            print(f"  log_prob_current range: [{log_prob_current.min().item():.4f}, {log_prob_current.max().item():.4f}]")
+            log_prob_current = torch.nan_to_num(log_prob_current, nan=0.0, posinf=0.0, neginf=-1e6)
+        
         # 清理不需要的中间变量以释放内存
         del current_result
         if torch.cuda.is_available():
@@ -437,6 +520,12 @@ class GRPOTrainer:
                 timesteps_sequence,
                 model_kwargs,
             )  # [B*G]
+            
+            # 检查 log_prob_ref 是否包含 NaN
+            if torch.isnan(log_prob_ref).any():
+                print("警告: log_prob_ref 包含 NaN")
+                print(f"  log_prob_ref range: [{log_prob_ref.min().item():.4f}, {log_prob_ref.max().item():.4f}]")
+                log_prob_ref = torch.nan_to_num(log_prob_ref, nan=0.0, posinf=0.0, neginf=-1e6)
         
         # 清理轨迹以释放内存（如果不再需要）
         # 注意：轨迹只在计算 log prob 时需要，之后可以删除
@@ -451,8 +540,20 @@ class GRPOTrainer:
         rewards = self.reward_fn(motions, expanded_prompts)  # [B*G]
         rewards = rewards.to(self.device)
         
+        # 检查奖励是否包含 NaN
+        if torch.isnan(rewards).any():
+            print("警告: rewards 包含 NaN")
+            print(f"  rewards range: [{rewards.min().item():.4f}, {rewards.max().item():.4f}]")
+            rewards = torch.nan_to_num(rewards, nan=0.0, posinf=1.0, neginf=0.0)
+        
         # ========== 阶段 3: 优势计算 ==========
         advantages = self.compute_group_advantages(rewards)  # [B*G]
+        
+        # 检查优势是否包含 NaN
+        if torch.isnan(advantages).any():
+            print("警告: advantages 包含 NaN")
+            print(f"  advantages range: [{advantages.min().item():.4f}, {advantages.max().item():.4f}]")
+            advantages = torch.nan_to_num(advantages, nan=0.0, posinf=1e6, neginf=-1e6)
         
         # ========== 阶段 4: 损失计算和更新 ==========
         loss, stats = self.compute_grpo_loss(
