@@ -335,6 +335,44 @@ def generate_args():
     return args
 
 
+def grpo_args():
+    """
+    解析 GRPO 训练的命令行参数
+    
+    扩展 train_args() 的参数解析器，添加 GRPO 特定参数。
+    用于 Group Relative Policy Optimization 训练。
+    """
+    parser = ArgumentParser(description='GRPO Training for Motion Diffusion Models')
+    add_base_options(parser)
+    add_data_options(parser)
+    add_model_options(parser)
+    add_diffusion_options(parser)
+    add_training_options(parser)
+    
+    # 添加 GRPO 特定参数
+    grpo_group = parser.add_argument_group('GRPO')
+    grpo_group.add_argument('--model_path', type=str, required=True,
+                            help='Path to pretrained model checkpoint')
+    grpo_group.add_argument('--ref_model_path', type=str, default=None,
+                            help='Path to reference model (if different from model_path)')
+    grpo_group.add_argument('--group_size', type=int, default=4,
+                            help='Group size G for GRPO (samples per prompt)')
+    grpo_group.add_argument('--learning_rate', type=float, default=1e-5,
+                            help='Learning rate for GRPO training')
+    grpo_group.add_argument('--clip_epsilon', type=float, default=0.2,
+                            help='PPO clipping parameter')
+    grpo_group.add_argument('--kl_penalty', type=float, default=0.1,
+                            help='KL divergence penalty weight')
+    grpo_group.add_argument('--reward_type', type=str, default='matching',
+                            choices=['matching', 'r_precision', 'combined'],
+                            help='Reward function type: matching (Matching Score), r_precision (R-Precision), or combined (both)')
+    
+    # 解析参数并应用规则
+    args = apply_rules(parser.parse_args())
+    
+    return args
+
+
 def edit_args():
     parser = ArgumentParser()
     # args specified by the user: (all other will be loaded from the model)

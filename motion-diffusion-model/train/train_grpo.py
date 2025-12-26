@@ -15,12 +15,13 @@ Usage:
 import os
 import json
 import torch
-import argparse
 from typing import Callable
+from tqdm import tqdm
 
 from utils.fixseed import fixseed
 from utils import dist_util
 from utils.model_util import create_model_and_diffusion, load_saved_model
+from utils.parser_util import grpo_args
 from data_loaders.get_data import get_dataset_loader
 from model.GRPO.grpo_trainer import create_grpo_trainer
 
@@ -77,47 +78,8 @@ def create_reward_fn(device: str = 'cuda', reward_type: str = 'matching', datase
         return reward_fn
 
 
-def parse_args():
-    """
-    解析命令行参数，扩展 train_args() 的参数解析器，添加 GRPO 特定参数
-    """
-    from utils.parser_util import add_base_options, add_data_options, add_model_options, add_diffusion_options, add_training_options, apply_rules
-    from argparse import ArgumentParser
-    
-    # 创建解析器并添加所有标准训练参数
-    parser = ArgumentParser(description='GRPO Training for Motion Diffusion Models')
-    add_base_options(parser)
-    add_data_options(parser)
-    add_model_options(parser)
-    add_diffusion_options(parser)
-    add_training_options(parser)
-    
-    # 添加 GRPO 特定参数
-    grpo_group = parser.add_argument_group('GRPO')
-    grpo_group.add_argument('--model_path', type=str, required=True,
-                            help='Path to pretrained model checkpoint')
-    grpo_group.add_argument('--ref_model_path', type=str, default=None,
-                            help='Path to reference model (if different from model_path)')
-    grpo_group.add_argument('--group_size', type=int, default=4,
-                            help='Group size G for GRPO (samples per prompt)')
-    grpo_group.add_argument('--learning_rate', type=float, default=1e-5,
-                            help='Learning rate for GRPO training')
-    grpo_group.add_argument('--clip_epsilon', type=float, default=0.2,
-                            help='PPO clipping parameter')
-    grpo_group.add_argument('--kl_penalty', type=float, default=0.1,
-                            help='KL divergence penalty weight')
-    grpo_group.add_argument('--reward_type', type=str, default='matching',
-                            choices=['matching', 'r_precision', 'combined'],
-                            help='Reward function type: matching (Matching Score), r_precision (R-Precision), or combined (both)')
-    
-    # 解析参数并应用规则
-    args = apply_rules(parser.parse_args())
-    
-    return args
-
-
 def main():
-    args = parse_args()
+    args = grpo_args()
     fixseed(args.seed)
     
     # Setup device
@@ -143,17 +105,39 @@ def main():
     
     # Create model and diffusion
     print("Creating model and diffusion...")
-    # args 已经包含了所有需要的参数（通过 parse_args() 扩展了 train_args()）
+    # args 已经包含了所有需要的参数（通过 grpo_args() 扩展了 train_args()）
     # 尝试从 checkpoint 加载参数（如果存在）
+    # 注意：保存用户指定的训练参数，避免被 checkpoint 参数覆盖
+    user_batch_size = args.batch_size
+    user_num_steps = args.num_steps
+    user_group_size = args.group_size
+    user_learning_rate = getattr(args, 'learning_rate', None) or getattr(args, 'lr', None)
+    
     checkpoint_dir = os.path.dirname(args.model_path)
     args_path = os.path.join(checkpoint_dir, 'args.json')
     if os.path.exists(args_path):
         with open(args_path, 'r') as f:
             checkpoint_args = json.load(f)
             for key, value in checkpoint_args.items():
-                if hasattr(args, key) and key not in ['model_path', 'save_dir', 'group_size', 'learning_rate', 'clip_epsilon', 'kl_penalty', 'reward_type']:
-                    # 只更新模型相关参数，不覆盖 GRPO 特定参数
+                # 保护用户指定的训练参数和 GRPO 特定参数
+                protected_keys = [
+                    'model_path', 'save_dir', 
+                    'group_size', 'learning_rate', 'clip_epsilon', 'kl_penalty', 'reward_type',
+                    'batch_size', 'num_steps', 'log_interval', 'save_interval'
+                ]
+                if hasattr(args, key) and key not in protected_keys:
+                    # 只更新模型相关参数，不覆盖用户指定的训练参数
                     setattr(args, key, value)
+    
+    # 恢复用户指定的训练参数（确保不被 checkpoint 覆盖）
+    args.batch_size = user_batch_size
+    args.num_steps = user_num_steps
+    args.group_size = user_group_size
+    if user_learning_rate is not None:
+        if hasattr(args, 'learning_rate'):
+            args.learning_rate = user_learning_rate
+        if hasattr(args, 'lr'):
+            args.lr = user_learning_rate
     
     model, diffusion = create_model_and_diffusion(args, data_loader)
     
@@ -209,55 +193,101 @@ def main():
     
     # Training loop
     print("Starting training...")
+    print(f"Total steps: {args.num_steps}, Batch size: {args.batch_size}, Group size: {args.group_size}")
     step = 0
     
-    for epoch in range(1000):  # Large number, will break on num_steps
-        for batch_idx, (motions, cond) in enumerate(data_loader):
+    # 创建进度条
+    pbar = tqdm(
+        total=args.num_steps,
+        desc="GRPO Training",
+        unit="step",
+        ncols=120,  # 进度条宽度
+        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]',
+    )
+    
+    try:
+        for epoch in range(1000):  # Large number, will break on num_steps
+            for batch_idx, (motions, cond) in enumerate(data_loader):
+                if step >= args.num_steps:
+                    break
+                
+                # Prepare batch for GRPO
+                # The batch should contain text prompts
+                batch = {
+                    'text': cond['y'].get('text', []),
+                    'lengths': cond['y'].get('lengths', None),
+                    'mask': cond['y'].get('mask', None),
+                }
+                
+                # Training step
+                try:
+                    stats = trainer.step(batch)
+                    
+                    # 更新进度条显示
+                    # 构建显示信息（只显示关键指标，避免过长）
+                    postfix_dict = {}
+                    
+                    # 主要指标（格式化显示）
+                    if 'loss' in stats:
+                        postfix_dict['Loss'] = f"{stats['loss']:.4f}"
+                    if 'mean_reward' in stats:
+                        postfix_dict['Reward'] = f"{stats['mean_reward']:.3f}"
+                    if 'mean_advantage' in stats:
+                        postfix_dict['Adv'] = f"{stats['mean_advantage']:.3f}"
+                    if 'mean_ratio' in stats:
+                        ratio_val = stats['mean_ratio']
+                        postfix_dict['Ratio'] = f"{ratio_val:.3f}"
+                    if 'kl_penalty' in stats:
+                        postfix_dict['KL'] = f"{stats['kl_penalty']:.4f}"
+                    
+                    # 更新进度条
+                    pbar.set_postfix(postfix_dict, refresh=False)
+                    pbar.update(1)
+                    
+                    # 每10步打印详细统计信息
+                    if step % 10 == 0:
+                        tqdm.write(f"\nStep {step}:")
+                        for key, value in stats.items():
+                            tqdm.write(f"  {key}: {value:.4f}")
+                    
+                    # 详细日志（按 log_interval，如果 log_interval > 10）
+                    if args.log_interval > 10 and step % args.log_interval == 0:
+                        tqdm.write(f"\n=== Detailed Log at Step {step} ===")
+                        for key, value in stats.items():
+                            tqdm.write(f"  {key}: {value:.4f}")
+                    
+                    # Save checkpoint
+                    if step % args.save_interval == 0 and step > 0:
+                        checkpoint_path = os.path.join(
+                            args.save_dir,
+                            f'model{step:09d}.pt'
+                        )
+                        torch.save({
+                            'model': model.state_dict(),
+                            'optimizer': trainer.optimizer.state_dict(),
+                            'step': step,
+                            'stats': stats,
+                        }, checkpoint_path)
+                        tqdm.write(f"✓ Saved checkpoint to {checkpoint_path}")
+                    
+                    step += 1
+                    
+                except Exception as e:
+                    tqdm.write(f"✗ Error at step {step}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    pbar.update(1)  # 即使出错也更新进度条
+                    step += 1
+                    continue
+            
             if step >= args.num_steps:
                 break
-            
-            # Prepare batch for GRPO
-            # The batch should contain text prompts
-            batch = {
-                'text': cond['y'].get('text', []),
-                'lengths': cond['y'].get('lengths', None),
-                'mask': cond['y'].get('mask', None),
-            }
-            
-            # Training step
-            try:
-                stats = trainer.step(batch)
-                
-                # Logging
-                if step % args.log_interval == 0:
-                    print(f"Step {step}:")
-                    for key, value in stats.items():
-                        print(f"  {key}: {value:.4f}")
-                
-                # Save checkpoint
-                if step % args.save_interval == 0 and step > 0:
-                    checkpoint_path = os.path.join(
-                        args.save_dir,
-                        f'model{step:09d}.pt'
-                    )
-                    torch.save({
-                        'model': model.state_dict(),
-                        'optimizer': trainer.optimizer.state_dict(),
-                        'step': step,
-                        'stats': stats,
-                    }, checkpoint_path)
-                    print(f"Saved checkpoint to {checkpoint_path}")
-                
-                step += 1
-                
-            except Exception as e:
-                print(f"Error at step {step}: {e}")
-                import traceback
-                traceback.print_exc()
-                continue
-        
-        if step >= args.num_steps:
-            break
+    finally:
+        # 确保进度条显示100%
+        if step < args.num_steps:
+            pbar.update(args.num_steps - step)
+        # 关闭进度条
+        pbar.close()
     
     # Save final checkpoint
     final_checkpoint_path = os.path.join(args.save_dir, 'model_final.pt')
@@ -266,7 +296,8 @@ def main():
         'optimizer': trainer.optimizer.state_dict(),
         'step': step,
     }, final_checkpoint_path)
-    print(f"Training complete! Final checkpoint saved to {final_checkpoint_path}")
+    print(f"\n✓ Training complete! Total steps: {step}")
+    print(f"✓ Final checkpoint saved to {final_checkpoint_path}")
 
 
 if __name__ == '__main__':

@@ -45,16 +45,14 @@
   # 将 batch_size 从 2 改为 1
   python -m train.train_grpo \
       --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt \
-      --save_dir ./save/grpo_finetuned \
+      --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000 \
       --dataset humanml \
-      --batch_size 1 \  # 从 2 改为 1
+      --batch_size 1 \  
       --group_size 4 \
       --num_steps 10000 \
       --learning_rate 1e-5 \
-      --use_lora \
-      --lora_r 8 \
-      --lora_alpha 16 \
-      --reward_type matching
+      --reward_type matching \
+  		--device 2
   ```
 
   
