@@ -146,3 +146,7 @@ dataset/
 
 # 预训练模型忽略
 *.zip
+
+model/LORA.md
+GRPO_README.md
+PROJECT_STRUCTURE_CN.md
