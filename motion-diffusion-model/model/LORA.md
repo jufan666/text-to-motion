@@ -25,15 +25,7 @@
 - rl训练 50步扩散mdm（750000）不带lora
 
   ```
-  python -m train.train_grpo     --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt     --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000     --dataset humanml     --batch_size 1 --group_size 2 --num_steps 10000 --learning_rate 5e-7 --kl_penalty 1.0 --clip_epsilon 0.1 --use_lora --lora_r 4 --lora_alpha 8 --reward_type matching --device 2  
-  ```
-
-  
-
-  
-
-  ```
-  python -m train.train_grpo     --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt     --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000     --dataset humanml     --batch_size 1 --group_size 2 --num_steps 10000 --learning_rate 5e-7 --kl_penalty 1.0 --clip_epsilon 0.1 --reward_type matching --device 2  
+  python -m train.train_grpo     --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt     --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000_2     --dataset humanml     --batch_size 1 --group_size 2 --num_steps 10000 --learning_rate 5e-7 --kl_penalty 1.0 --clip_epsilon 0.1 --use_lora --lora_r 4 --lora_alpha 8 --reward_type matching --device 1  
   ```
 
   

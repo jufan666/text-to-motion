@@ -332,6 +332,15 @@ class GRPOTrainer:
         group_mean = rewards_reshaped.mean(dim=1, keepdim=True)  # [B, 1]
         group_std = rewards_reshaped.std(dim=1, keepdim=True)  # [B, 1]
         
+        # 检查组内奖励差异是否过小
+        if (group_std < 1e-6).any():
+            print("警告: 组内奖励标准差过小，advantage 可能接近 0")
+            print(f"  rewards range: [{rewards.min().item():.4f}, {rewards.max().item():.4f}]")
+            print(f"  rewards mean: {rewards.mean().item():.4f}, std: {rewards.std().item():.4f}")
+            print(f"  group_mean range: [{group_mean.min().item():.4f}, {group_mean.max().item():.4f}]")
+            print(f"  group_std range: [{group_std.min().item():.4f}, {group_std.max().item():.4f}]")
+            print(f"  建议: 检查奖励函数是否有足够的区分度，或增加 group_size 以获得更多样本多样性")
+        
         # 数值稳定性：确保 std 不会太小
         group_std = torch.clamp(group_std, min=self.advantage_eps)
         
@@ -439,6 +448,30 @@ class GRPOTrainer:
         
         # 总损失: 策略损失 - KL 惩罚
         loss = -(policy_loss.mean() - self.kl_penalty * kl.mean())
+        
+        # 损失缩放：如果损失值过大，进行缩放以避免梯度爆炸
+        # 这对于高维数据和大的 log prob 值很重要
+        loss_scale = 1.0
+        loss_value = loss.item() if not torch.isnan(loss) and not torch.isinf(loss) else float('inf')
+        
+        if abs(loss_value) > 1e6:
+            # 计算缩放因子，使损失值在合理范围内
+            loss_scale = 1e6 / abs(loss_value)
+            print("警告: 损失值异常大，应用损失缩放")
+            print(f"  原始 loss: {loss_value:.2f}")
+            print(f"  缩放因子: {loss_scale:.6f}")
+            print(f"  policy_loss mean: {policy_loss.mean().item():.4f}")
+            print(f"  kl mean: {kl.mean().item():.4f}")
+            print(f"  mean_ratio: {ratio.mean().item():.4f}")
+            print(f"  mean_advantage: {advantages.mean().item():.4f}")
+            loss = loss * loss_scale
+        
+        # 检查损失是否异常大（可能导致梯度爆炸）
+        loss_value_after_scale = loss.item() if not torch.isnan(loss) and not torch.isinf(loss) else float('inf')
+        if abs(loss_value_after_scale) > 1e6:
+            print("错误: 损失值仍然异常大，即使经过缩放")
+            print(f"  缩放后 loss: {loss_value_after_scale:.2f}")
+            print(f"  建议: 检查损失计算，可能需要进一步降低学习率或增加 KL 惩罚")
         
         # 检查损失是否包含 NaN
         if torch.isnan(loss) or torch.isinf(loss):
@@ -554,13 +587,14 @@ class GRPOTrainer:
         
         # 检查 log_prob_current 绝对值是否过大
         # 对于高维数据，log prob 绝对值大是正常的，但需要限制范围以确保数值稳定
-        if (log_prob_current.abs() > 1e6).any():
+        # 注意：限制范围不能太小，否则会丢失 log_prob_current 和 log_prob_ref 之间的差异信息
+        if (log_prob_current.abs() > 1e7).any():
             print("警告: log_prob_current 绝对值过大")
-            print(f"  log_prob_current range: [{log_prob_current.min().item():.2f}, {log_prob_current.max().item():.2f}]")
+            print(f"  log_prob_current range (before clamp): [{log_prob_current.min().item():.2f}, {log_prob_current.max().item():.2f}]")
             print(f"  log_prob_current mean: {log_prob_current.mean().item():.2f}")
-            print(f"  注意: 对于高维数据，log prob 绝对值大是正常的，将被限制在 [-1e6, 1e6]")
-            # 限制范围（与 log_prob_ref 保持一致）
-            log_prob_current = torch.clamp(log_prob_current, min=-1e6, max=1e6)
+            print(f"  注意: 对于高维数据，log prob 绝对值大是正常的，将被限制在 [-1e7, 1e7]")
+            # 限制范围（增加到 -1e7 到 1e7，保留更多信息）
+            log_prob_current = torch.clamp(log_prob_current, min=-1e7, max=1e7)
         
         # 清理不需要的中间变量以释放内存
         del current_result
@@ -585,12 +619,13 @@ class GRPOTrainer:
             
             # 检查 log_prob_ref 绝对值是否过大
             # 对于高维数据，log prob 绝对值大是正常的
-            if (log_prob_ref.abs() > 1e6).any():
+            # 注意：限制范围应该与 log_prob_current 保持一致，以保留差值信息
+            if (log_prob_ref.abs() > 1e7).any():
                 print("警告: log_prob_ref 绝对值过大")
-                print(f"  log_prob_ref range: [{log_prob_ref.min().item():.2f}, {log_prob_ref.max().item():.2f}]")
+                print(f"  log_prob_ref range (before clamp): [{log_prob_ref.min().item():.2f}, {log_prob_ref.max().item():.2f}]")
                 print(f"  log_prob_ref mean: {log_prob_ref.mean().item():.2f}")
-                print(f"  注意: 对于高维数据，log prob 绝对值大是正常的")
-                log_prob_ref = torch.clamp(log_prob_ref, min=-1e6, max=1e6)
+                print(f"  注意: 对于高维数据，log prob 绝对值大是正常的，将被限制在 [-1e7, 1e7]")
+                log_prob_ref = torch.clamp(log_prob_ref, min=-1e7, max=1e7)
         
         # 清理轨迹以释放内存（如果不再需要）
         # 注意：轨迹只在计算 log prob 时需要，之后可以删除
@@ -631,12 +666,75 @@ class GRPOTrainer:
         stats['mean_reward'] = rewards.mean().item()
         stats['std_reward'] = rewards.std().item()
         
+        # 检查损失是否异常
+        if torch.isnan(loss) or torch.isinf(loss):
+            print("错误: 损失包含 NaN 或 Inf，跳过此步")
+            print(f"  loss: {loss.item() if not torch.isnan(loss) else 'NaN'}")
+            print(f"  policy_loss: {stats.get('policy_loss', 'N/A')}")
+            print(f"  kl_penalty: {stats.get('kl_penalty', 'N/A')}")
+            print(f"  mean_ratio: {stats.get('mean_ratio', 'N/A')}")
+            print(f"  mean_advantage: {stats.get('mean_advantage', 'N/A')}")
+            # 返回统计信息但不更新模型
+            return stats
+        
         # 反向传播
         self.optimizer.zero_grad()
         loss.backward()
         
-        # 梯度裁剪（可选但推荐）
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        # 计算梯度范数（在裁剪之前）
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
+        stats['grad_norm'] = grad_norm.item()
+        
+        # 检查梯度是否异常
+        if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+            print(f"错误: 梯度包含 NaN 或 Inf，跳过此步")
+            print(f"  grad_norm: {grad_norm.item() if not torch.isnan(grad_norm) else 'NaN'}")
+            # 清零梯度，不更新模型
+            self.optimizer.zero_grad()
+            return stats
+        
+        # 分析梯度来源（找出哪个参数导致梯度爆炸）
+        if grad_norm > 1000:
+            print(f"警告: 梯度范数异常大 ({grad_norm.item():.2f})，分析梯度来源...")
+            max_grad_per_param = 0
+            max_grad_param_name = None
+            for name, param in self.model.named_parameters():
+                if param.grad is not None:
+                    param_grad_norm = param.grad.norm().item()
+                    if param_grad_norm > max_grad_per_param:
+                        max_grad_per_param = param_grad_norm
+                        max_grad_param_name = name
+            if max_grad_param_name:
+                print(f"  最大梯度来自参数: {max_grad_param_name}")
+                print(f"  该参数的梯度范数: {max_grad_per_param:.2f}")
+        
+        # 梯度裁剪：使用更严格的值
+        # 如果梯度太大，先裁剪，然后检查是否仍然异常
+        max_grad_norm = 1.0  # 非常严格的值，因为学习率已经很小
+        if grad_norm > max_grad_norm:
+            print(f"警告: 梯度范数过大 ({grad_norm.item():.2f})，将被裁剪到 {max_grad_norm}")
+            print(f"  损失值: {loss.item():.4f}")
+            print(f"  policy_loss: {stats.get('policy_loss', 'N/A')}")
+            print(f"  kl_penalty: {stats.get('kl_penalty', 'N/A')}")
+            print(f"  mean_ratio: {stats.get('mean_ratio', 'N/A')}")
+            print(f"  mean_advantage: {stats.get('mean_advantage', 'N/A')}")
+            
+            # 裁剪梯度
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_grad_norm)
+            
+            # 重新计算梯度范数
+            grad_norm_after = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float('inf'))
+            stats['grad_norm'] = grad_norm_after.item()
+            
+            # 如果裁剪后仍然很大，跳过更新
+            if grad_norm_after > max_grad_norm * 10:
+                print(f"错误: 梯度裁剪后仍然过大 ({grad_norm_after.item():.2f})，跳过此步")
+                print(f"  建议: 进一步降低学习率（当前: 5e-7），或增加 KL 惩罚，或检查损失计算")
+                self.optimizer.zero_grad()
+                return stats
+        else:
+            # 正常情况下的梯度裁剪
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=max_grad_norm)
         
         self.optimizer.step()
         
@@ -714,7 +812,21 @@ def create_grpo_trainer(
     """
     # 创建优化器（仅针对可训练参数，例如 LoRA）
     trainable_params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate)
+    
+    # 验证只有 LoRA 参数是可训练的
+    trainable_param_names = [name for name, param in model.named_parameters() if param.requires_grad]
+    non_lora_trainable = [name for name in trainable_param_names if 'lora' not in name.lower()]
+    if non_lora_trainable:
+        print(f"警告: 发现非 LoRA 参数是可训练的: {non_lora_trainable[:5]}")
+        if len(non_lora_trainable) > 5:
+            print(f"  ... 还有 {len(non_lora_trainable) - 5} 个参数")
+    else:
+        print(f"✓ 确认: 只有 LoRA 参数是可训练的（共 {len(trainable_param_names)} 个参数）")
+    
+    if len(trainable_params) == 0:
+        raise ValueError("错误: 没有可训练的参数！请检查模型是否正确配置了 LoRA")
+    
+    optimizer = torch.optim.AdamW(trainable_params, lr=learning_rate, weight_decay=0.01)
     
     return GRPOTrainer(
         model=model,
