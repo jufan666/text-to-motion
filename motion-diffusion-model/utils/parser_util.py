@@ -363,9 +363,24 @@ def grpo_args():
                             help='PPO clipping parameter')
     grpo_group.add_argument('--kl_penalty', type=float, default=1,
                             help='KL divergence penalty weight')
+    grpo_group.add_argument('--reward_model_type', type=str, default='mdm',
+                            choices=['mdm', 'tmr'],
+                            help='Reward model type: mdm (MDM evaluator) or tmr (TMR pretrained model)')
     grpo_group.add_argument('--reward_type', type=str, default='matching',
-                            choices=['matching', 'r_precision', 'combined'],
-                            help='Reward function type: matching (Matching Score), r_precision (R-Precision), or combined (both)')
+                            choices=['matching', 'r_precision', 'combined', 'cosine'],
+                            help='Reward function type: matching (Matching Score), r_precision (R-Precision), combined (both), or cosine (for TMR)')
+    grpo_group.add_argument('--tmr_checkpoint_path', type=str, default=None,
+                            help='Path to TMR pretrained checkpoint (required if reward_model_type=tmr)')
+    grpo_group.add_argument('--tmr_similarity_type', type=str, default='cosine',
+                            choices=['cosine', 'euclidean'],
+                            help='Similarity type for TMR reward (cosine or euclidean)')
+    grpo_group.add_argument('--tmr_normalization', type=str, default='linear',
+                            choices=['linear', 'exponential', 'sigmoid'],
+                            help='Normalization method for TMR reward (linear, exponential, or sigmoid)')
+    grpo_group.add_argument('--tmr_max_distance', type=float, default=10.0,
+                            help='Max distance for TMR euclidean distance normalization')
+    grpo_group.add_argument('--tmr_scale', type=float, default=2.0,
+                            help='Scale factor for TMR exponential/sigmoid normalization')
     
     # 解析参数并应用规则
     args = apply_rules(parser.parse_args())

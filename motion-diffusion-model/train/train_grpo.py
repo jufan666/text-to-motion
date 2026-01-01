@@ -18,7 +18,7 @@ import torch
 import matplotlib
 matplotlib.use('Agg')  # 使用非交互式后端，适合服务器环境
 import matplotlib.pyplot as plt
-from typing import Callable
+from typing import Callable, Optional
 from tqdm import tqdm
 
 from utils.fixseed import fixseed
@@ -29,56 +29,112 @@ from data_loaders.get_data import get_dataset_loader
 from model.GRPO.grpo_trainer import create_grpo_trainer
 
 
-def create_reward_fn(device: str = 'cuda', reward_type: str = 'matching', dataset_name: str = 'humanml') -> Callable:
+def create_reward_fn(
+    device: str = 'cuda',
+    reward_model_type: str = 'mdm',
+    reward_type: str = 'matching',
+    dataset_name: str = 'humanml',
+    tmr_checkpoint_path: Optional[str] = None,
+    tmr_similarity_type: str = 'cosine',
+    tmr_normalization: str = 'linear',
+    tmr_max_distance: float = 10.0,
+    tmr_scale: float = 2.0,
+) -> Callable:
     """
     创建动作生成的奖励函数
     
-    MDM 项目本身不使用 reward 函数，而是使用评估指标。
-    这里我们基于 MDM 的评估器（EvaluatorMDMWrapper）创建奖励函数。
+    支持两种奖励模型：
+    1. MDM 评估器奖励函数（基于 MDM 项目的评估器）
+    2. TMR 预训练模型奖励函数（基于 TMR 预训练权重）
     
     参数:
         device: 运行设备
-        reward_type: 奖励类型 ('matching', 'r_precision', 'combined')
-            - 'matching': 基于文本-动作匹配分数（欧氏距离）
-            - 'r_precision': 基于 R-Precision
-            - 'combined': 组合多种指标
+        reward_model_type: 奖励模型类型 ('mdm' 或 'tmr')
+        reward_type: 奖励类型
+            - 对于 MDM: 'matching', 'r_precision', 'combined'
+            - 对于 TMR: 'matching', 'cosine'
         dataset_name: 数据集名称 ('humanml' 或 'kit')
+        tmr_checkpoint_path: TMR 预训练权重路径（仅当 reward_model_type='tmr' 时需要）
+        tmr_similarity_type: TMR 相似度类型 ('cosine' 或 'euclidean')
+        tmr_normalization: TMR 归一化方式 ('linear', 'exponential', 'sigmoid')
+        tmr_max_distance: TMR 最大距离（用于线性归一化）
+        tmr_scale: TMR 缩放因子（用于指数/Sigmoid 归一化）
         
     返回:
         reward_fn: 计算奖励的函数
     """
-    try:
-        # 尝试使用基于 MDM 评估器的奖励函数
-        from model.GRPO.reward_model import create_mdm_reward_function
-        reward_fn = create_mdm_reward_function(
-            reward_type=reward_type,
-            dataset_name=dataset_name,
-            device=device,
-        )
-        print(f"使用 MDM 评估器奖励函数 (类型: {reward_type}, 数据集: {dataset_name})")
-        return reward_fn
-    except Exception as e:
-        print(f"无法加载 MDM 评估器奖励函数: {e}")
-        print("使用占位奖励函数（随机奖励）")
-        
-        # 占位函数
-        def reward_fn(motions: torch.Tensor, prompts: list) -> torch.Tensor:
-            """
-            计算生成动作的奖励（占位函数）
+    if reward_model_type == 'mdm':
+        # 使用 MDM 评估器奖励函数
+        try:
+            from model.GRPO.reward_model import create_mdm_reward_function
+            reward_fn = create_mdm_reward_function(
+                reward_type=reward_type,
+                dataset_name=dataset_name,
+                device=device,
+            )
+            print(f"✓ 使用 MDM 评估器奖励函数 (类型: {reward_type}, 数据集: {dataset_name})")
+            return reward_fn
+        except Exception as e:
+            print(f"✗ 无法加载 MDM 评估器奖励函数: {e}")
+            print("使用占位奖励函数（随机奖励）")
             
-            参数:
-                motions: 生成的动作序列 [B, njoints, nfeats, nframes]
-                prompts: 文本提示列表 [B]
-                
-            返回:
-                rewards: 奖励值 [B]
-            """
-            batch_size = motions.shape[0]
-            # 占位：返回随机奖励
-            rewards = torch.randn(batch_size, device=motions.device) * 0.1 + 0.5
-            return rewards
+            # 占位函数
+            def reward_fn(motions: torch.Tensor, prompts: list) -> torch.Tensor:
+                batch_size = motions.shape[0]
+                rewards = torch.randn(batch_size, device=motions.device) * 0.1 + 0.5
+                return rewards
+            
+            return reward_fn
+    
+    elif reward_model_type == 'tmr':
+        # 使用 TMR 预训练模型奖励函数
+        if tmr_checkpoint_path is None:
+            raise ValueError("使用 TMR 奖励模型时，必须提供 --tmr_checkpoint_path 参数")
         
-        return reward_fn
+        try:
+            from model.GRPO.reward_model_tmr import create_tmr_reward_function
+            
+            # 构建 TMR 奖励函数的参数
+            tmr_kwargs = {}
+            if reward_type == 'matching':
+                # 对于 matching 类型，可以配置相似度和归一化方式
+                tmr_kwargs['similarity_type'] = tmr_similarity_type
+                tmr_kwargs['normalization'] = tmr_normalization
+                tmr_kwargs['max_distance'] = tmr_max_distance
+                tmr_kwargs['scale'] = tmr_scale
+            # 对于 cosine 类型，使用默认参数即可
+            
+            reward_fn = create_tmr_reward_function(
+                tmr_checkpoint_path=tmr_checkpoint_path,
+                reward_type=reward_type,
+                dataset_name=dataset_name,
+                device=device,
+                **tmr_kwargs,
+            )
+            print(f"✓ 使用 TMR 预训练模型奖励函数")
+            print(f"  - 权重路径: {tmr_checkpoint_path}")
+            print(f"  - 奖励类型: {reward_type}")
+            if reward_type == 'matching':
+                print(f"  - 相似度类型: {tmr_similarity_type}")
+                print(f"  - 归一化方式: {tmr_normalization}")
+            print(f"  - 数据集: {dataset_name}")
+            return reward_fn
+        except Exception as e:
+            print(f"✗ 无法加载 TMR 奖励函数: {e}")
+            import traceback
+            traceback.print_exc()
+            print("使用占位奖励函数（随机奖励）")
+            
+            # 占位函数
+            def reward_fn(motions: torch.Tensor, prompts: list) -> torch.Tensor:
+                batch_size = motions.shape[0]
+                rewards = torch.randn(batch_size, device=motions.device) * 0.1 + 0.5
+                return rewards
+            
+            return reward_fn
+    
+    else:
+        raise ValueError(f"不支持的奖励模型类型: {reward_model_type}，请选择 'mdm' 或 'tmr'")
 
 
 def main():
@@ -176,8 +232,18 @@ def main():
     ref_model.eval()
     
     # Create reward function
-    print(f"Creating reward function (type: {args.reward_type})...")
-    reward_fn = create_reward_fn(device=device, reward_type=args.reward_type, dataset_name=args.dataset)
+    print(f"Creating reward function (model: {args.reward_model_type}, type: {args.reward_type})...")
+    reward_fn = create_reward_fn(
+        device=device,
+        reward_model_type=args.reward_model_type,
+        reward_type=args.reward_type,
+        dataset_name=args.dataset,
+        tmr_checkpoint_path=getattr(args, 'tmr_checkpoint_path', None),
+        tmr_similarity_type=getattr(args, 'tmr_similarity_type', 'cosine'),
+        tmr_normalization=getattr(args, 'tmr_normalization', 'linear'),
+        tmr_max_distance=getattr(args, 'tmr_max_distance', 10.0),
+        tmr_scale=getattr(args, 'tmr_scale', 2.0),
+    )
     
     # Create GRPO trainer
     print("Creating GRPO trainer...")

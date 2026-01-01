@@ -446,8 +446,8 @@ class GRPOTrainer:
         policy_loss_2 = ratio_clipped * advantages
         policy_loss = torch.min(policy_loss_1, policy_loss_2)
         
-        # 总损失: 策略损失 - KL 惩罚
-        loss = -(policy_loss.mean() - self.kl_penalty * kl.mean())
+        # 总损失: 策略损失
+        loss = -policy_loss.mean()
         
         # 损失缩放：如果损失值过大，进行缩放以避免梯度爆炸
         # 这对于高维数据和大的 log prob 值很重要
