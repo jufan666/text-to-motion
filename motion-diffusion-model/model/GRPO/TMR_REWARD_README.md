@@ -229,7 +229,5 @@ ImportError: TMR 相关模块未找到
 - MDM 项目: 当前项目的 README
 - GRPO 训练: `train/GRPO_README.md`
 
----
 
-*如有问题或建议，请提交 Issue 或 PR。*
 
