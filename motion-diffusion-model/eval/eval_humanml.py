@@ -41,6 +41,11 @@ def evaluate_matching_score(eval_wrapper, motion_loaders, file):
                 )
                 dist_mat = euclidean_distance_matrix(text_embeddings.cpu().numpy(),
                                                      motion_embeddings.cpu().numpy())
+                    # 检查 dist_mat 是否包含 NaN
+                if np.isnan(dist_mat).any():
+                    print(f"警告: dist_mat 包含 NaN，跳过此 batch")
+                    continue
+                
                 matching_score_sum += dist_mat.trace()
 
                 argsmax = np.argsort(dist_mat, axis=1)
@@ -52,8 +57,18 @@ def evaluate_matching_score(eval_wrapper, motion_loaders, file):
                 all_motion_embeddings.append(motion_embeddings.cpu().numpy())
 
             all_motion_embeddings = np.concatenate(all_motion_embeddings, axis=0)
-            matching_score = matching_score_sum / all_size
-            R_precision = top_k_count / all_size
+            
+            # 计算 matching_score，但检查是否为 NaN
+            if all_size > 0:
+                matching_score = matching_score_sum / all_size
+                if np.isnan(matching_score):
+                    print(f"警告: [{motion_loader_name}] Matching Score 为 NaN，设置为 0")
+                    matching_score = 0.0
+            else:
+                matching_score = 0.0
+                print(f"警告: [{motion_loader_name}] all_size 为 0，无法计算 Matching Score")
+            
+            R_precision = top_k_count / all_size if all_size > 0 else np.zeros(3)
             match_score_dict[motion_loader_name] = matching_score
             R_precision_dict[motion_loader_name] = R_precision
             activation_dict[motion_loader_name] = all_motion_embeddings
@@ -139,7 +154,8 @@ def get_metric_statistics(values, replication_times):
 def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replication_times, 
                diversity_times, mm_num_times, run_mm=False, eval_platform=None):
     with open(log_file, 'w') as f:
-        all_metrics = OrderedDict({'Matching Score': OrderedDict({}),
+        # 不统计 Matching Score（因为可能为 NaN）
+        all_metrics = OrderedDict({
                                    'R_precision': OrderedDict({}),
                                    'FID': OrderedDict({}),
                                    'Diversity': OrderedDict({}),
@@ -175,11 +191,12 @@ def evaluation(eval_wrapper, gt_loader, eval_motion_loaders, log_file, replicati
             print(f'!!! DONE !!!')
             print(f'!!! DONE !!!', file=f, flush=True)
 
-            for key, item in mat_score_dict.items():
-                if key not in all_metrics['Matching Score']:
-                    all_metrics['Matching Score'][key] = [item]
-                else:
-                    all_metrics['Matching Score'][key] += [item]
+            # 跳过 Matching Score 的统计（因为可能为 NaN）
+            # for key, item in mat_score_dict.items():
+            #     if key not in all_metrics['Matching Score']:
+            #         all_metrics['Matching Score'][key] = [item]
+            #     else:
+            #         all_metrics['Matching Score'][key] += [item]
 
             for key, item in R_precision_dict.items():
                 if key not in all_metrics['R_precision']:

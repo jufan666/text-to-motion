@@ -706,58 +706,23 @@ FileNotFoundError: TMR 权重文件不存在: ...
 
   ```bash
   # 使用余弦相似度 + 线性归一化
-  python -m train.train_grpo --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt --save_dir ./save/grpo_tmr_matching_cosine --dataset humanml --batch_size 2 --group_size 4 --num_steps 10000 --reward_model_type tmr  --reward_type matching  --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt --device 1 --tmr_similarity_type cosine
+  python -m train.train_grpo --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000_tmr_matching_cosine --dataset humanml --batch_size 1 --group_size 4 --num_steps 10000 --reward_model_type tmr  --reward_type matching  --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt  --tmr_similarity_type cosine --device 1
   
   # 使用欧氏距离 + 线性归一化
-  python -m train.train_grpo \
-      --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt \
-      --save_dir ./save/grpo_tmr_matching_euclidean_linear \
-      --dataset humanml \
-      --batch_size 2 \
-      --group_size 4 \
-      --num_steps 10000 \
-      --reward_model_type tmr \
-      --reward_type matching \
-   --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt
-      --tmr_similarity_type euclidean \
-      --tmr_normalization linear \
-      --tmr_max_distance 10.0
+  python -m train.train_grpo --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt  --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000_tmr_matching_euclidean_linear --dataset humanml --batch_size 1 --group_size 4 --num_steps 10000 --reward_model_type tmr --reward_type matching --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt --tmr_similarity_type euclidean --tmr_normalization linear --tmr_max_distance 10.0 --device 0
   
   # 使用欧氏距离 + 指数归一化
-  python -m train.train_grpo \
-      --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt \
-      --save_dir ./save/grpo_tmr_matching_euclidean_exp \
-      --dataset humanml \
-      --batch_size 2 \
-      --group_size 4 \
-      --num_steps 10000 \
-      --reward_model_type tmr \
-      --reward_type matching \
-  --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt
-      --tmr_similarity_type euclidean \
-      --tmr_normalization exponential \
-      --tmr_scale 2.0
+  python -m train.train_grpo --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt --save_dir ./save/grpo_finetuned_humanml_enc_512_50steps_750000_tmr_matching_euclidean_exp --dataset humanml --batch_size 1 --group_size 4 --num_steps 10000 --reward_model_type tmr --reward_type matching 
+  --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt --tmr_similarity_type euclidean --tmr_normalization exponential --tmr_scale 2.0 --device 1
   
   # 使用欧氏距离 + Sigmoid 归一化
-  python -m train.train_grpo \
-      --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt \
-      --save_dir ./save/grpo_tmr_matching_euclidean_sigmoid \
-      --dataset humanml \
-      --batch_size 2 \
-      --group_size 4 \
-      --num_steps 10000 \
-      --reward_model_type tmr \
-      --reward_type matching \
-  --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt
-      --tmr_similarity_type euclidean \
-      --tmr_normalization sigmoid \
-      --tmr_scale 2.0
+  python -m train.train_grpo --model_path ./save/official_humanml_enc_512_50steps/model000750000.pt --save_dir /save/grpo_finetuned_humanml_enc_512_50steps_750000_tmr_matching_euclidean_sigmoid --dataset humanml --batch_size 1 --group_size 4 --num_steps 10000 --reward_model_type tmr --reward_type matching 
+  --tmr_text_encoder_path ./model/GRPO/tmr_weights/text_encoder.pt --tmr_motion_encoder_path ./model/GRPO/tmr_weights/motion_encoder.pt --tmr_movement_encoder_path ./model/GRPO/tmr_weights/motion_decoder.pt --tmr_similarity_type euclidean --tmr_normalization sigmoid --tmr_scale 2.0 --device 2
   ```
   
   
 
 **奖励类型选项**：
-
 - `--reward_model_type`: 选择奖励模型类型
   - `mdm` (默认): 使用 MDM 评估器奖励函数
   - `tmr`: 使用 TMR 预训练模型奖励函数
@@ -841,3 +806,6 @@ tensorboard --logdir ./save/grpo_finetuned
 - **Advantage**: `mean_advantage`, `std_advantage`
 - **LogProb**: `mean_log_prob_current`, `mean_log_prob_ref`, `mean_ratio`
 - **Training**: `grad_norm`, `learning_rate`
+
+- 评估命令
+python -m eval.eval_humanml --model_path ./save/humanml_trans_enc_512/model000475000.pt
