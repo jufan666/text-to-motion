@@ -367,12 +367,16 @@ class TMRRewardFunction:
         处理文本，提取词和词性
         
         参数:
-            sentence: 输入文本
+            sentence: 输入文本（str 或 List[str]，如果是列表则连接）
             
         返回:
             word_list: 词列表
             pos_list: 词性列表
         """
+        # 处理输入：如果是列表，转换为字符串
+        if isinstance(sentence, list):
+            sentence = " ".join(sentence)
+        
         if self.nlp is not None:
             # 使用 spacy 处理（推荐方式）
             sentence = sentence.replace('-', '')
@@ -730,6 +734,9 @@ class TMRRewardFunction:
                 pos_scores = []
                 for k in range(K):
                     text_k = text_lists[b][k]
+                    # 确保 text_k 是字符串（如果是列表则连接）
+                    if isinstance(text_k, list):
+                        text_k = " ".join(text_k)
                     motion_k = motion_segments[k]
                     
                     # 准备输入
@@ -761,6 +768,9 @@ class TMRRewardFunction:
                     text_embs_all = []
                     for k in range(K):
                         text_k = text_lists[b][k]
+                        # 确保 text_k 是字符串（如果是列表则连接）
+                        if isinstance(text_k, list):
+                            text_k = " ".join(text_k)
                         word_embs_k, pos_ohot_k, cap_lens_k = self._prepare_text_inputs([text_k])
                         with torch.no_grad():
                             text_emb_k, _ = self.tmr_model.get_co_embeddings(
@@ -786,7 +796,11 @@ class TMRRewardFunction:
                         
                         # 获取动作嵌入
                         with torch.no_grad():
-                            word_embs_placeholder, pos_ohot_placeholder, cap_lens_placeholder = self._prepare_text_inputs([text_lists[b][0]])
+                            text_placeholder = text_lists[b][0]
+                            # 确保 text_placeholder 是字符串（如果是列表则连接）
+                            if isinstance(text_placeholder, list):
+                                text_placeholder = " ".join(text_placeholder)
+                            word_embs_placeholder, pos_ohot_placeholder, cap_lens_placeholder = self._prepare_text_inputs([text_placeholder])
                             _, motion_emb_k = self.tmr_model.get_co_embeddings(
                                 word_embs=word_embs_placeholder,
                                 pos_ohot=pos_ohot_placeholder,

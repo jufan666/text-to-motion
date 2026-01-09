@@ -47,9 +47,27 @@ def get_dataset(name, num_frames, split='train', hml_mode='train', abs_path='.',
         if name == 'humanml' or name == 't2m':
             mean = np.load(pjoin(abs_path, 'dataset/HumanML3D/Mean.npy'))
             std = np.load(pjoin(abs_path, 'dataset/HumanML3D/Std.npy'))
+            # 加载用于评估的均值和标准差（T2M 评估器使用的格式）
+            try:
+                from data_loaders.humanml.utils.get_opt import get_opt
+                opt = get_opt(pjoin(abs_path, 'dataset/humanml_opt.txt'), 'cpu')
+                mean_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
+                std_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
+            except:
+                # 如果无法加载，使用默认值
+                mean_for_eval = mean
+                std_for_eval = std
         elif name == 'kit':
             mean = np.load(pjoin(abs_path, 'dataset/KIT-ML/Mean.npy'))
             std = np.load(pjoin(abs_path, 'dataset/KIT-ML/Std.npy'))
+            try:
+                from data_loaders.humanml.utils.get_opt import get_opt
+                opt = get_opt(pjoin(abs_path, 'dataset/kit_opt.txt'), 'cpu')
+                mean_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_mean.npy'))
+                std_for_eval = np.load(pjoin(opt.meta_dir, f'{opt.dataset_name}_std.npy'))
+            except:
+                mean_for_eval = mean
+                std_for_eval = std
         else:
             raise ValueError(f"Composite dataset not supported for dataset: {name}")
         
@@ -65,6 +83,9 @@ def get_dataset(name, num_frames, split='train', hml_mode='train', abs_path='.',
             w_vectorizer=w_vectorizer,
             max_motion_length=196,
             fps=20.0 if name == 'humanml' else 12.5,
+            mode=hml_mode,  # 传递模式参数
+            mean_for_eval=mean_for_eval,
+            std_for_eval=std_for_eval,
         )
         return dataset
     

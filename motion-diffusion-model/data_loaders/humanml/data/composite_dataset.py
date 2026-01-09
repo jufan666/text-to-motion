@@ -12,6 +12,7 @@ from os.path import join as pjoin
 from typing import List, Dict, Optional
 import random
 from data_loaders.humanml.utils.word_vectorizer import WordVectorizer
+import spacy
 
 
 class CompositeDataset(data.Dataset):
@@ -36,6 +37,9 @@ class CompositeDataset(data.Dataset):
         w_vectorizer: WordVectorizer,
         max_motion_length: int = 196,
         fps: float = 20.0,
+        mode: str = 'eval',
+        mean_for_eval: np.ndarray = None,
+        std_for_eval: np.ndarray = None,
     ):
         """
         初始化复合数据集
@@ -47,6 +51,9 @@ class CompositeDataset(data.Dataset):
             w_vectorizer: 词向量化器
             max_motion_length: 最大动作长度（帧）
             fps: 帧率
+            mode: 数据集模式（'train', 'eval', 'gt'等）
+            mean_for_eval: 用于评估的均值（如果为None，使用mean）
+            std_for_eval: 用于评估的标准差（如果为None，使用std）
         """
         self.mean = mean
         self.std = std
@@ -54,6 +61,31 @@ class CompositeDataset(data.Dataset):
         self.fps = fps
         self.w_vectorizer = w_vectorizer
         self.max_text_len = 20
+        self.mode = mode
+        
+        # 用于评估的均值和标准差（兼容 comp_v6_model_dataset.py）
+        self.mean_for_eval = mean_for_eval if mean_for_eval is not None else mean
+        self.std_for_eval = std_for_eval if std_for_eval is not None else std
+        
+        # 创建一个简单的 t2m_dataset 包装器以兼容 comp_v6_model_dataset.py
+        # 这个包装器只提供 inv_transform 方法
+        class SimpleT2MDataset:
+            def __init__(self, mean, std):
+                self.mean = mean
+                self.std = std
+            
+            def inv_transform(self, data):
+                """逆变换：从归一化数据恢复到原始数据"""
+                return data * self.std + self.mean
+        
+        self.t2m_dataset = SimpleT2MDataset(mean, std)
+        
+        # 初始化 spacy 用于文本处理（将普通文本转换为 word/POS 格式）
+        try:
+            self.nlp = spacy.load('en_core_web_sm')
+        except OSError:
+            print("警告: 无法加载 spacy 模型 'en_core_web_sm'，将使用简单的文本处理")
+            self.nlp = None
         
         # 加载复合数据集
         print(f"Loading composite dataset from {composite_data_path}...")
@@ -62,12 +94,46 @@ class CompositeDataset(data.Dataset):
         self.samples = data_dict['samples']
         self.metadata = data_dict.get('metadata', {})
         
+        # 从文件名推断 split（如果文件名包含 split 信息）
+        # 例如：composite_k3_test.npy -> test
+        file_split = 'unknown'
+        if 'test' in composite_data_path.lower():
+            file_split = 'test'
+        elif 'val' in composite_data_path.lower() or 'validation' in composite_data_path.lower():
+            file_split = 'val'
+        elif 'train' in composite_data_path.lower():
+            file_split = 'train'
+        
+        # 优先使用 metadata 中的 split，如果不存在则使用从文件名推断的
+        actual_split = self.metadata.get('split', file_split)
+        
         print(f"Loaded {len(self.samples)} composite samples")
         print(f"K={self.metadata.get('k_segments', 'unknown')}, "
-              f"Split={self.metadata.get('split', 'unknown')}")
+              f"Split={actual_split} (from metadata: {self.metadata.get('split', 'N/A')}, from filename: {file_split})")
+        
+        # 添加 num_actions 属性以兼容评估代码（与 HumanML3D 数据集保持一致）
+        self.num_actions = 1  # dummy placeholder
     
     def __len__(self):
         return len(self.samples)
+    
+    def _process_text_to_tokens(self, sentence):
+        """将普通文本转换为 word/POS 格式的 tokens（参考 RawTextDataset）"""
+        sentence = sentence.replace('-', '')
+        doc = self.nlp(sentence)
+        word_list = []
+        pos_list = []
+        for token in doc:
+            word = token.text
+            if not word.isalpha():
+                continue
+            if (token.pos_ == 'NOUN' or token.pos_ == 'VERB') and (word != 'left'):
+                word_list.append(token.lemma_)
+            else:
+                word_list.append(word)
+            pos_list.append(token.pos_)
+        tokens = ['%s/%s' % (word_list[i], pos_list[i]) for i in range(len(word_list))]
+        return tokens
     
     def __getitem__(self, idx):
         """
@@ -85,8 +151,15 @@ class CompositeDataset(data.Dataset):
         durations_frames = sample['durations_frames']  # List[int] (帧)
         source_ids = sample['source_ids']  # List[str]
         
-        # 处理文本：使用 composite_prompt
-        tokens = composite_prompt.split()
+        # 处理文本：将 composite_prompt 转换为 word/POS 格式的 tokens
+        if self.nlp is not None:
+            # 使用 spacy 处理文本，提取词性和词根
+            tokens = self._process_text_to_tokens(composite_prompt)
+        else:
+            # 简单处理：假设所有词都是 OTHER 类型
+            words = composite_prompt.split()
+            tokens = [f'{word}/OTHER' for word in words]
+        
         if len(tokens) < self.max_text_len:
             tokens = ['sos/OTHER'] + tokens + ['eos/OTHER']
             sent_len = len(tokens)

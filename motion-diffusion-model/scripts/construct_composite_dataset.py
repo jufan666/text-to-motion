@@ -13,7 +13,6 @@
 import os
 import sys
 import numpy as np
-import torch
 import argparse
 from tqdm import tqdm
 from os.path import join as pjoin
@@ -175,7 +174,8 @@ def construct_composite_dataset(dataset_name='humanml', split='train', k_segment
     else:
         raise ValueError(f"不支持的数据集: {dataset_name}")
     
-    opt = get_opt(datapath, device)
+    # 数据集构造不需要 GPU，使用 'cpu' 即可
+    opt = get_opt(datapath, 'cpu')
     opt.motion_dir = pjoin(abs_path, opt.motion_dir)
     opt.text_dir = pjoin(abs_path, opt.text_dir)
     opt.data_root = pjoin(abs_path, opt.data_root)
@@ -191,22 +191,43 @@ def construct_composite_dataset(dataset_name='humanml', split='train', k_segment
     id_list_shuffled = id_list.copy()
     random.shuffle(id_list_shuffled)
     
+    # 用于去重，避免重复尝试相同的组合
+    tried_combinations = set()
+    
     print(f"\n构造复合样本 (K={k_segments})...")
     pbar = tqdm(total=max_samples, desc="Creating composite samples")
     
     idx = 0
     attempts = 0
-    max_attempts = max_samples * 100
+    consecutive_failures = 0
+    max_attempts = max_samples * 200  # 增加最大尝试次数
+    max_consecutive_failures = len(id_list) * 10  # 如果连续失败太多次，重新洗牌
     
     while len(composite_samples) < max_samples and attempts < max_attempts:
         attempts += 1
         
+        # 如果索引超出范围，重新洗牌
         if idx + k_segments > len(id_list_shuffled):
             random.shuffle(id_list_shuffled)
             idx = 0
+            consecutive_failures = 0  # 重置连续失败计数
         
         sample_ids = id_list_shuffled[idx:idx+k_segments]
         idx += k_segments
+        
+        # 检查是否已经尝试过这个组合（去重）
+        combination_key = tuple(sorted(sample_ids))
+        if combination_key in tried_combinations:
+            consecutive_failures += 1
+            if consecutive_failures > max_consecutive_failures:
+                # 如果连续失败太多次，重新洗牌并清空已尝试组合
+                random.shuffle(id_list_shuffled)
+                idx = 0
+                consecutive_failures = 0
+                tried_combinations.clear()
+            continue
+        
+        tried_combinations.add(combination_key)
         
         composite_sample = create_composite_sample(
             sample_ids=sample_ids,
@@ -220,8 +241,17 @@ def construct_composite_dataset(dataset_name='humanml', split='train', k_segment
         if composite_sample is not None:
             composite_samples.append(composite_sample)
             pbar.update(1)
+            consecutive_failures = 0  # 重置连续失败计数
+        else:
+            consecutive_failures += 1
     
     pbar.close()
+    
+    if attempts >= max_attempts:
+        print(f"\n⚠️  警告: 达到最大尝试次数 ({max_attempts})，停止构造")
+        print(f"   成功生成 {len(composite_samples)}/{max_samples} 个样本")
+        print(f"   成功率: {len(composite_samples)/attempts*100:.2f}%")
+        print(f"   建议: 增大 --tolerance 参数或减小 --target_length 参数以提高成功率")
     
     if len(composite_samples) == 0:
         raise ValueError(
@@ -272,19 +302,10 @@ def main():
     parser.add_argument('--tolerance', type=int, default=20)
     parser.add_argument('--fps', type=float, default=20.0)
     parser.add_argument('--max_samples', type=int, default=1000)
-    parser.add_argument('--device', type=str, default='cuda')
     parser.add_argument('--abs_path', type=str, default='.')
     parser.add_argument('--cache_path', type=str, default='.')
     
     args = parser.parse_args()
-    
-    if args.device == 'auto':
-        if torch.cuda.is_available():
-            args.device = 'cuda'
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            args.device = 'mps'
-        else:
-            args.device = 'cpu'
     
     construct_composite_dataset(
         dataset_name=args.dataset,
@@ -295,7 +316,6 @@ def main():
         tolerance=args.tolerance,
         fps=args.fps,
         max_samples=args.max_samples,
-        device=args.device,
         abs_path=args.abs_path,
         cache_path=args.cache_path,
     )

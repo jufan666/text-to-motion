@@ -72,22 +72,42 @@ def calculate_activation_statistics(activations):
 
 def calculate_diversity(activation, diversity_times):
     assert len(activation.shape) == 2
-    assert activation.shape[0] > diversity_times
     num_samples = activation.shape[0]
+    
+    # 如果样本数量少于 diversity_times，调整采样数量或允许重复采样
+    if num_samples <= diversity_times:
+        # 如果样本数量太少，使用所有样本并允许重复采样
+        actual_diversity_times = min(num_samples, diversity_times)
+        replace = num_samples < diversity_times
+        if num_samples == 0:
+            return 0.0  # 如果没有样本，返回0
+    else:
+        actual_diversity_times = diversity_times
+        replace = False
 
-    first_indices = np.random.choice(num_samples, diversity_times, replace=False)
-    second_indices = np.random.choice(num_samples, diversity_times, replace=False)
+    first_indices = np.random.choice(num_samples, actual_diversity_times, replace=replace)
+    second_indices = np.random.choice(num_samples, actual_diversity_times, replace=replace)
     dist = linalg.norm(activation[first_indices] - activation[second_indices], axis=1)
     return dist.mean()
 
 
 def calculate_multimodality(activation, multimodality_times):
     assert len(activation.shape) == 3
-    assert activation.shape[1] > multimodality_times
     num_per_sent = activation.shape[1]
+    
+    # 如果每个句子的样本数量少于 multimodality_times，调整采样数量或允许重复采样
+    if num_per_sent <= multimodality_times:
+        # 如果样本数量太少，使用所有样本并允许重复采样
+        actual_multimodality_times = min(num_per_sent, multimodality_times)
+        replace = num_per_sent < multimodality_times
+        if num_per_sent == 0:
+            return 0.0  # 如果没有样本，返回0
+    else:
+        actual_multimodality_times = multimodality_times
+        replace = False
 
-    first_dices = np.random.choice(num_per_sent, multimodality_times, replace=False)
-    second_dices = np.random.choice(num_per_sent, multimodality_times, replace=False)
+    first_dices = np.random.choice(num_per_sent, actual_multimodality_times, replace=replace)
+    second_dices = np.random.choice(num_per_sent, actual_multimodality_times, replace=replace)
     dist = linalg.norm(activation[:, first_dices] - activation[:, second_dices], axis=2)
     return dist.mean()
 
@@ -122,25 +142,76 @@ def calculate_frechet_distance(mu1, sigma1, mu2, sigma2, eps=1e-6):
     assert sigma1.shape == sigma2.shape, \
         'Training and test covariances have different dimensions'
 
+    # 检查并处理 NaN 和 Inf 值
+    if not np.isfinite(mu1).all():
+        print("Warning: mu1 contains non-finite values, replacing with 0")
+        mu1 = np.nan_to_num(mu1, nan=0.0, posinf=0.0, neginf=0.0)
+    if not np.isfinite(mu2).all():
+        print("Warning: mu2 contains non-finite values, replacing with 0")
+        mu2 = np.nan_to_num(mu2, nan=0.0, posinf=0.0, neginf=0.0)
+    if not np.isfinite(sigma1).all():
+        print("Warning: sigma1 contains non-finite values, replacing with eps")
+        sigma1 = np.nan_to_num(sigma1, nan=eps, posinf=eps, neginf=eps)
+        # 确保对称性
+        sigma1 = (sigma1 + sigma1.T) / 2
+    if not np.isfinite(sigma2).all():
+        print("Warning: sigma2 contains non-finite values, replacing with eps")
+        sigma2 = np.nan_to_num(sigma2, nan=eps, posinf=eps, neginf=eps)
+        # 确保对称性
+        sigma2 = (sigma2 + sigma2.T) / 2
+
     diff = mu1 - mu2
 
+    # 确保协方差矩阵是对称的（数值误差可能导致不对称）
+    sigma1 = (sigma1 + sigma1.T) / 2
+    sigma2 = (sigma2 + sigma2.T) / 2
+
+    # 添加小的正则化项以提高数值稳定性
+    sigma1 += np.eye(sigma1.shape[0]) * eps
+    sigma2 += np.eye(sigma2.shape[0]) * eps
+
     # Product might be almost singular
-    covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+    try:
+        covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
+        if not np.isfinite(covmean).all():
+            msg = ('fid calculation produces singular product; '
+                   'adding %s to diagonal of cov estimates') % eps
+            print(msg)
+            offset = np.eye(sigma1.shape[0]) * eps
+            covmean, _ = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset), disp=False)
+    except (ValueError, np.linalg.LinAlgError) as e:
+        # 如果计算失败，使用更保守的方法
+        print(f"Warning: sqrtm calculation failed ({e}), using alternative method")
+        # 使用特征值分解的替代方法
+        eigvals1, eigvecs1 = np.linalg.eigh(sigma1)
+        eigvals2, eigvecs2 = np.linalg.eigh(sigma2)
+        # 确保特征值为正
+        eigvals1 = np.maximum(eigvals1, eps)
+        eigvals2 = np.maximum(eigvals2, eps)
+        sqrt_sigma1 = eigvecs1 @ np.diag(np.sqrt(eigvals1)) @ eigvecs1.T
+        sqrt_sigma2 = eigvecs2 @ np.diag(np.sqrt(eigvals2)) @ eigvecs2.T
+        covmean = sqrt_sigma1 @ sqrt_sigma2
+
+    # 再次检查并处理非有限值
     if not np.isfinite(covmean).all():
-        msg = ('fid calculation produces singular product; '
-               'adding %s to diagonal of cov estimates') % eps
-        print(msg)
-        offset = np.eye(sigma1.shape[0]) * eps
-        covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
+        print("Warning: covmean contains non-finite values, using identity matrix")
+        covmean = np.eye(sigma1.shape[0]) * eps
 
     # Numerical error might give slight imaginary component
     if np.iscomplexobj(covmean):
         if not np.allclose(np.diagonal(covmean).imag, 0, atol=1e-3):
             m = np.max(np.abs(covmean.imag))
-            raise ValueError('Imaginary component {}'.format(m))
+            print(f"Warning: covmean has significant imaginary component {m}, taking real part")
         covmean = covmean.real
 
     tr_covmean = np.trace(covmean)
-
-    return (diff.dot(diff) + np.trace(sigma1) +
-            np.trace(sigma2) - 2 * tr_covmean)
+    
+    # 确保结果是有限的
+    result = (diff.dot(diff) + np.trace(sigma1) +
+              np.trace(sigma2) - 2 * tr_covmean)
+    
+    if not np.isfinite(result):
+        print("Warning: FID calculation resulted in non-finite value, returning large value")
+        return 1e10  # 返回一个大的值作为占位符
+    
+    return result

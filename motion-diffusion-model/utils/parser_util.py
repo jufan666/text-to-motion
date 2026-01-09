@@ -334,13 +334,7 @@ def add_evaluation_options(parser):
                         help="Sets the source of the init frames, either from the dataset or isaac init poses.")
     group.add_argument("--guidance_param", default=2.5, type=float,
                        help="For classifier-free sampling - specifies the s parameter, as defined in the paper.")
-    # 复合数据集评估选项
-    group.add_argument("--use_composite_dataset", action='store_true',
-                       help="Use composite dataset for evaluation")
-    group.add_argument("--composite_data_path", type=str, default=None,
-                       help="Path to composite dataset .npy file (required if --use_composite_dataset)")
-    group.add_argument("--composite_k_segments", type=int, default=3, choices=[3, 4, 5],
-                       help="Number of segments K in composite dataset (default: 3)")
+    # 注意：复合数据集选项在 add_data_options 中定义，避免重复
 
 
 def get_cond_mode(args):
